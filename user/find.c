@@ -45,7 +45,7 @@ void find(char *path, char *fn) {
         }
         break;
       case T_DIR:
-        if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0) {
+        if (de.inum == 0 || strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0) {
           continue;
         } else {
           find(buf, fn);
