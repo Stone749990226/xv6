@@ -235,6 +235,9 @@ int fork(void) {
     return -1;
   }
 
+  // lab2:追踪掩码从父进程复制到子进程
+  np->trace_mask = p->trace_mask;
+
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
     freeproc(np);
@@ -618,4 +621,19 @@ void procdump(void) {
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// lab2:collect the number of processes
+// 这一段代码是参考allocproc函数写出来的
+uint64 get_proc_num(void) {
+  uint64 num = 0;
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state != UNUSED) {
+      num++;
+    }
+    release(&p->lock);
+  }
+  return num;
 }

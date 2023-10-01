@@ -2,7 +2,7 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
-
+// 它期望从命令行接收两个或更多参数，第一个参数是追踪掩码（mask），用于按位指定要追踪的系统调用。第二个参数及之后的参数是要执行的命令和其参数。
 int main(int argc, char *argv[]) {
   int i;
   char *nargv[MAXARG];

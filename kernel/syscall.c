@@ -88,23 +88,50 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+// lab2
+extern uint64 sys_trace(void);
+extern uint64 sys_sysinfo(void);
 
 static uint64 (*syscalls[])(void) = {
-    [SYS_fork] sys_fork,   [SYS_exit] sys_exit,     [SYS_wait] sys_wait,     [SYS_pipe] sys_pipe,
-    [SYS_read] sys_read,   [SYS_kill] sys_kill,     [SYS_exec] sys_exec,     [SYS_fstat] sys_fstat,
-    [SYS_chdir] sys_chdir, [SYS_dup] sys_dup,       [SYS_getpid] sys_getpid, [SYS_sbrk] sys_sbrk,
-    [SYS_sleep] sys_sleep, [SYS_uptime] sys_uptime, [SYS_open] sys_open,     [SYS_write] sys_write,
-    [SYS_mknod] sys_mknod, [SYS_unlink] sys_unlink, [SYS_link] sys_link,     [SYS_mkdir] sys_mkdir,
-    [SYS_close] sys_close,
+    [SYS_fork] sys_fork,   [SYS_exit] sys_exit,     [SYS_wait] sys_wait,       [SYS_pipe] sys_pipe,
+    [SYS_read] sys_read,   [SYS_kill] sys_kill,     [SYS_exec] sys_exec,       [SYS_fstat] sys_fstat,
+    [SYS_chdir] sys_chdir, [SYS_dup] sys_dup,       [SYS_getpid] sys_getpid,   [SYS_sbrk] sys_sbrk,
+    [SYS_sleep] sys_sleep, [SYS_uptime] sys_uptime, [SYS_open] sys_open,       [SYS_write] sys_write,
+    [SYS_mknod] sys_mknod, [SYS_unlink] sys_unlink, [SYS_link] sys_link,       [SYS_mkdir] sys_mkdir,
+    [SYS_close] sys_close, [SYS_trace] sys_trace,   [SYS_sysinfo] sys_sysinfo,
 };
 
+// 存储系统调用的名称，方便打印出来
+char syscall_name[23][10] = {"fork",  "exit",   "wait",   "pipe",  "read",  "kill",   "exec",   "fstat",
+                             "chdir", "dup",    "getpid", "sbrk",  "sleep", "uptime", "open",   "write",
+                             "mknod", "unlink", "link",   "mkdir", "close", "trace",  "sysinfo"};
+
+// lab2:
+// 例:exec(init, argv)
+// .globl start
+// start:
+//   la a0, init
+//   la a1, argv
+//   li a7, SYS_exec
+//   ecall
+// 用户在执行ecall前，把可能的参数依次放在a0~a5寄存器中，把系统调用号放在a7寄存器中（其实是由编译器自动完成的）
+// 执行ecall后，trap进内核，开始执行kernel/syscall.c中的syscall(void)函数中的代码
+// 它从a7中获取系统调用号，接着去syscalls函数指针数组中索引对应的系统调用函数指针
+// 若可以索引到，就执行这个系统调用函数，否则就打印我们之前看到的未知的系统调用错误提示信息。执行后，系统调用的返回值存储在a0寄存器中。
+// 程序是否被追踪是通过 p->trace_mask 来确定的。每个进程（struct proc）都有一个名为 trace_mask
+// 的字段，用于存储追踪掩码。 该掩码是一个整数，其中每个位对应一个系统调用。
 void syscall(void) {
   int num;
   struct proc *p = myproc();
 
+  // num = p->trapframe->a7 会读取使用的系统调用对应的整数
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // 下面这一行是实际执行系统调用，num用来索引一个数组，这个数组是一个函数指针数组，将返回值存入a0中
     p->trapframe->a0 = syscalls[num]();
+    if (p->trace_mask > 0 && (p->trace_mask & (1 << num))) {
+      printf("%d: syscall %s -> %d\n", p->pid, syscall_name[num - 1], p->trapframe->a0);
+    }
   } else {
     printf("%d %s: unknown sys call %d\n", p->pid, p->name, num);
     p->trapframe->a0 = -1;

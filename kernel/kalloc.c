@@ -68,3 +68,18 @@ void *kalloc(void) {
   if (r) memset((char *)r, 5, PGSIZE);  // fill with junk
   return (void *)r;
 }
+
+// lab2:返回空闲内存
+// freelist是空闲页表的链表，只需要计算链表长度即可
+uint64 get_free_memory_amount(void) {
+  struct run *r;
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  int amount = 0;
+  while (r) {
+    r = r->next;
+    amount += PGSIZE;
+  }
+  release(&kmem.lock);
+  return amount;
+}
