@@ -24,6 +24,8 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 int rename(const char*);
+// hitsz lab2
+void yield(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

@@ -21,6 +21,9 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[];  // trampoline.S
 
+// hitsz lab2
+char proc_states[5][10] = {"unused", "sleep", "runble", "run", "zombie"};
+
 // initialize the proc table at boot time.
 void procinit(void) {
   struct proc *p;
@@ -271,7 +274,7 @@ int fork(void) {
 // Caller must hold p->lock.
 void reparent(struct proc *p) {
   struct proc *pp;
-
+  int i = 0;
   for (pp = proc; pp < &proc[NPROC]; pp++) {
     // this code uses pp->parent without holding pp->lock.
     // acquiring the lock first could cause a deadlock
@@ -282,11 +285,14 @@ void reparent(struct proc *p) {
       // because only the parent changes it, and we're the parent.
       acquire(&pp->lock);
       pp->parent = initproc;
+      exit_info("proc %d exit, child %d, pid %d, name child%d, state %s\n", p->pid, i, pp->pid, i,
+                proc_states[pp->state]);
       // we should wake up init here, but that would require
       // initproc->lock, which would be a deadlock, since we hold
       // the lock on one of init's children (pp). this is why
       // exit() always wakes init (before acquiring any locks).
       release(&pp->lock);
+      i++;
     }
   }
 }
@@ -330,6 +336,8 @@ void exit(int status) {
   // as anything else.
   acquire(&p->lock);
   struct proc *original_parent = p->parent;
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
+            proc_states[original_parent->state]);
   release(&p->lock);
 
   // we need the parent's lock in order to wake it up from wait().
@@ -356,7 +364,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flag) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -401,6 +409,10 @@ int wait(uint64 addr) {
     }
 
     // Wait for a child to exit.
+    if (flag) {
+      release(&p->lock);
+      return -1;
+    }
     sleep(p, &p->lock);  // DOC: wait-sleep
   }
 }
@@ -471,6 +483,7 @@ void sched(void) {
 // Give up the CPU for one scheduling round.
 void yield(void) {
   struct proc *p = myproc();
+  printf("start to yield, user pc %p\n", p->trapframe->epc);
   acquire(&p->lock);
   p->state = RUNNABLE;
   sched();
