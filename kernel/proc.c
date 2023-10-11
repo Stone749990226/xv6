@@ -285,7 +285,7 @@ void reparent(struct proc *p) {
       // because only the parent changes it, and we're the parent.
       acquire(&pp->lock);
       pp->parent = initproc;
-      exit_info("proc %d exit, child %d, pid %d, name child%d, state %s\n", p->pid, i, pp->pid, i,
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, i, pp->pid, pp->name,
                 proc_states[pp->state]);
       // we should wake up init here, but that would require
       // initproc->lock, which would be a deadlock, since we hold
@@ -483,7 +483,6 @@ void sched(void) {
 // Give up the CPU for one scheduling round.
 void yield(void) {
   struct proc *p = myproc();
-  printf("start to yield, user pc %p\n", p->trapframe->epc);
   acquire(&p->lock);
   p->state = RUNNABLE;
   sched();

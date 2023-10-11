@@ -85,6 +85,7 @@ uint64 sys_rename(void) {
 }
 
 uint64 sys_yield(void) {
+  printf("start to yield, user pc %p\n", myproc()->trapframe->epc);
   yield();
   return 0;
 }
