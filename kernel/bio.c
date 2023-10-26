@@ -13,7 +13,6 @@
 // * Only one process at a time can use a buffer,
 //     so do not keep them longer than necessary.
 
-
 #include "types.h"
 #include "param.h"
 #include "spinlock.h"
@@ -23,79 +22,128 @@
 #include "fs.h"
 #include "buf.h"
 
-struct {
-  struct spinlock lock;
-  struct buf buf[NBUF];
+#define NBUCKETS 13
 
+// 使用哈希锁
+
+struct
+{
+  struct spinlock globalLock;
+  struct spinlock lock[NBUCKETS];
+  struct buf buf[NBUF];
   // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  struct buf head;
+  // head.next is most recently used.
+  // struct buf head;
+  struct buf hashbucket[NBUCKETS]; // 每个哈希队列一个linked list及一个lock
 } bcache;
 
-void
-binit(void)
+void binit(void)
 {
   struct buf *b;
-
-  initlock(&bcache.lock, "bcache");
+  // 初始化全局分配大锁
+  initlock(&bcache.globalLock, "bcache");
+  char lockname[16];
+  for (int i = 0; i < NBUCKETS; i++)
+  {
+    snprintf(lockname, sizeof(lockname), "bcache_%d", i);
+    bcache.hashbucket[i].prev = &bcache.hashbucket[i];
+    bcache.hashbucket[i].next = &bcache.hashbucket[i];
+  }
+  for (b = bcache.buf; b < bcache.buf + NBUF; b++)
+  {
+    b->next = bcache.hashbucket[0].next;
+    b->prev = &bcache.hashbucket[0];
+    initsleeplock(&b->lock, "buffer");
+    bcache.hashbucket[0].next->prev = b;
+    bcache.hashbucket[0].next = b;
+  }
 
   // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
+  // bcache.head.prev = &bcache.head;
+  // bcache.head.next = &bcache.head;
+  // for(b = bcache.buf; b < bcache.buf+NBUF; b++){
+  //   b->next = bcache.head.next;
+  //   b->prev = &bcache.head;
+  //   initsleeplock(&b->lock, "buffer");
+  //   bcache.head.next->prev = b;
+  //   bcache.head.next = b;
+  // }
 }
 
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
-static struct buf*
+static struct buf *
 bget(uint dev, uint blockno)
 {
   struct buf *b;
 
-  acquire(&bcache.lock);
+  uint hashNumber = blockno % NBUCKETS;
+  acquire(&bcache.lock[hashNumber]);
 
   // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
+  for (b = bcache.hashbucket[hashNumber].next; b != &bcache.hashbucket[hashNumber]; b = b->next)
+  {
+    if (b->dev == dev && b->blockno == blockno)
+    {
       b->refcnt++;
-      release(&bcache.lock);
+      release(&bcache.lock[hashNumber]);
       acquiresleep(&b->lock);
       return b;
     }
   }
 
   // Not cached.
+  release(&bcache.lock[hashNumber]);
   // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
+  // 获取全局分配大锁
+  acquire(&bcache.globalLock);
+  // 获取原有桶的锁
+  acquire(&bcache.lock[hashNumber]);
+  for (int i = 0; i < NBUCKETS; i++)
+  {
+    if (i == hashNumber)
+      continue;
+    // 获取新桶的锁
+    acquire(&bcache.lock[i]);
+    for (b = bcache.hashbucket[i].prev; b != &bcache.hashbucket[i]; b = b->prev)
+    {
+      if (b->refcnt == 0)
+      // 在其他哈希桶中找到了一个空闲块
+      {
+        b->dev = dev;
+        b->blockno = blockno;
+        b->valid = 0;
+        b->refcnt = 1;
+        // 将b块移动到hashNumber对应的块中
+        b->next->prev = b->prev;
+        b->prev->next = b->next;
+        b->next = bcache.hashbucket[hashNumber].next;
+        b->prev = &bcache.hashbucket[hashNumber];
+        // 释放新桶的锁
+        release(&bcache.lock[i]);
+        acquiresleep(&b->lock);
+        // 释放原有桶的锁
+        release(&bcache.lock[hashNumber]);
+        // 释放全局分配大锁
+        release(&bcache.globalLock);
+        return b;
+      }
     }
+    release(&bcache.lock[i]);
   }
   panic("bget: no buffers");
 }
 
 // Return a locked buf with the contents of the indicated block.
-struct buf*
+struct buf *
 bread(uint dev, uint blockno)
 {
   struct buf *b;
 
   b = bget(dev, blockno);
-  if(!b->valid) {
+  if (!b->valid)
+  {
     virtio_disk_rw(b, 0);
     b->valid = 1;
   }
@@ -103,51 +151,51 @@ bread(uint dev, uint blockno)
 }
 
 // Write b's contents to disk.  Must be locked.
-void
-bwrite(struct buf *b)
+void bwrite(struct buf *b)
 {
-  if(!holdingsleep(&b->lock))
+  if (!holdingsleep(&b->lock))
     panic("bwrite");
   virtio_disk_rw(b, 1);
 }
 
 // Release a locked buffer.
 // Move to the head of the most-recently-used list.
-void
-brelse(struct buf *b)
+void brelse(struct buf *b)
 {
-  if(!holdingsleep(&b->lock))
+  uint hashNumber = b->blockno % NBUCKETS;
+  if (!holdingsleep(&b->lock))
     panic("brelse");
 
   releasesleep(&b->lock);
 
-  acquire(&bcache.lock);
+  acquire(&bcache.lock[hashNumber]);
   b->refcnt--;
-  if (b->refcnt == 0) {
+  if (b->refcnt == 0)
+  {
     // no one is waiting for it.
     b->next->prev = b->prev;
     b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    b->next = bcache.hashbucket[hashNumber].next;
+    b->prev = &bcache.hashbucket[hashNumber];
+    bcache.hashbucket[hashNumber].next->prev = b;
+    bcache.hashbucket[hashNumber].next = b;
   }
-  
-  release(&bcache.lock);
+
+  release(&bcache.lock[hashNumber]);
 }
 
-void
-bpin(struct buf *b) {
-  acquire(&bcache.lock);
+void bpin(struct buf *b)
+{
+  uint hashNumber = b->blockno % NBUCKETS;
+  acquire(&bcache.lock[hashNumber]);
   b->refcnt++;
-  release(&bcache.lock);
+  release(&bcache.lock[hashNumber]);
 }
 
-void
-bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+void bunpin(struct buf *b)
+{
+  uint hashNumber = b->blockno % NBUCKETS;
+  acquire(&bcache.lock[hashNumber]);
   b->refcnt--;
-  release(&bcache.lock);
+  release(&bcache.lock[hashNumber]);
 }
-
-
