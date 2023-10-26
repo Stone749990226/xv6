@@ -322,6 +322,8 @@ grade:
           (echo "'make clean' failed.  HINT: Do you have another running instance of xv6?" && exit 1)
 	./grade-lab-$(LAB) $(GRADEFLAGS)
 
+diff:
+	git diff lock-base HEAD > commit.patch
 format:
 	python3 clang-format.py
 
