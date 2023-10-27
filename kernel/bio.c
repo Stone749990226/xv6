@@ -42,10 +42,9 @@ void binit(void)
   struct buf *b;
   // 初始化全局分配大锁
   initlock(&bcache.globalLock, "bcache");
-  char lockname[16];
   for (int i = 0; i < NBUCKETS; i++)
   {
-    snprintf(lockname, sizeof(lockname), "bcache_%d", i);
+    initlock(&bcache.lock[i], "bcache");
     bcache.hashbucket[i].prev = &bcache.hashbucket[i];
     bcache.hashbucket[i].next = &bcache.hashbucket[i];
   }
@@ -53,7 +52,7 @@ void binit(void)
   {
     b->next = bcache.hashbucket[0].next;
     b->prev = &bcache.hashbucket[0];
-    initsleeplock(&b->lock, "buffer");
+    initsleeplock(&b->lock, "bcache.bucket");
     bcache.hashbucket[0].next->prev = b;
     bcache.hashbucket[0].next = b;
   }
@@ -94,8 +93,24 @@ bget(uint dev, uint blockno)
   }
 
   // Not cached.
-  release(&bcache.lock[hashNumber]);
   // Recycle the least recently used (LRU) unused buffer.
+  // 先看自己的桶里有没有空闲块
+  for (b = bcache.hashbucket[hashNumber].prev; b != &bcache.hashbucket[hashNumber]; b = b->prev)
+  {
+    if (b->refcnt == 0)
+    {
+      b->dev = dev;
+      b->blockno = blockno;
+      b->valid = 0;
+      b->refcnt = 1;
+      release(&bcache.lock[hashNumber]);
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+  release(&bcache.lock[hashNumber]);
+
+  // 如果自己的桶里没有空闲块：
   // 获取全局分配大锁
   acquire(&bcache.globalLock);
   // 获取原有桶的锁
@@ -120,6 +135,8 @@ bget(uint dev, uint blockno)
         b->prev->next = b->next;
         b->next = bcache.hashbucket[hashNumber].next;
         b->prev = &bcache.hashbucket[hashNumber];
+        bcache.hashbucket[hashNumber].next->prev = b;
+        bcache.hashbucket[hashNumber].next = b;
         // 释放新桶的锁
         release(&bcache.lock[i]);
         acquiresleep(&b->lock);
@@ -130,6 +147,7 @@ bget(uint dev, uint blockno)
         return b;
       }
     }
+    // 如果一个桶没找到，释放该桶的锁，继续进入for循环
     release(&bcache.lock[i]);
   }
   panic("bget: no buffers");
